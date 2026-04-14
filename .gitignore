@@ -1,0 +1,12 @@
+# built binary
+/mdv
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# logs / tmp
+*.log
