@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"embed"
+	"errors"
 	"flag"
 	"fmt"
 	"html/template"
@@ -12,6 +13,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -84,6 +87,77 @@ func renderMarkdown(path string) (template.HTML, error) {
 	return template.HTML(buf.String()), nil
 }
 
+func isMarkdown(name string) bool {
+	ext := strings.ToLower(filepath.Ext(name))
+	return ext == ".md" || ext == ".markdown"
+}
+
+func listMarkdownFiles(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read dir %s: %w", dir, err)
+	}
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || !isMarkdown(e.Name()) {
+			continue
+		}
+		out = append(out, e.Name())
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return strings.ToLower(out[i]) < strings.ToLower(out[j])
+	})
+	return out, nil
+}
+
+func resolveTarget(baseDir, rel string) (string, error) {
+	if rel == "" {
+		return "", errors.New("empty file")
+	}
+	if filepath.IsAbs(rel) {
+		return "", errors.New("absolute path not allowed")
+	}
+	cleaned := filepath.Clean(rel)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", errors.New("path escapes base")
+	}
+	candidate, err := filepath.Abs(filepath.Join(baseDir, cleaned))
+	if err != nil {
+		return "", fmt.Errorf("abs: %w", err)
+	}
+	if candidate != baseDir && !strings.HasPrefix(candidate, baseDir+string(filepath.Separator)) {
+		return "", errors.New("path escapes base")
+	}
+	if !isMarkdown(candidate) {
+		return "", errors.New("not a markdown file")
+	}
+	st, err := os.Stat(candidate)
+	if err != nil {
+		return "", fmt.Errorf("stat: %w", err)
+	}
+	if st.IsDir() {
+		return "", errors.New("is a directory")
+	}
+	return candidate, nil
+}
+
+type currentFile struct {
+	mu   sync.RWMutex
+	path string
+}
+
+func (c *currentFile) get() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.path
+}
+
+func (c *currentFile) set(p string) {
+	c.mu.Lock()
+	c.path = p
+	c.mu.Unlock()
+}
+
 type broadcaster struct {
 	mu      sync.Mutex
 	clients map[chan struct{}]bool
@@ -121,16 +195,14 @@ func (b *broadcaster) publish() {
 	}
 }
 
-func watchFile(path string, b *broadcaster) error {
+func watchDir(dir string, current *currentFile, b *broadcaster) error {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
-		return err
+		return fmt.Errorf("new watcher: %w", err)
 	}
-	dir := filepath.Dir(path)
 	if err := w.Add(dir); err != nil {
-		return err
+		return fmt.Errorf("watch %s: %w", dir, err)
 	}
-	abs, _ := filepath.Abs(path)
 	go func() {
 		var timer *time.Timer
 		for {
@@ -139,11 +211,11 @@ func watchFile(path string, b *broadcaster) error {
 				if !ok {
 					return
 				}
-				evAbs, _ := filepath.Abs(ev.Name)
-				if evAbs != abs {
+				if ev.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) == 0 {
 					continue
 				}
-				if ev.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) == 0 {
+				evAbs, _ := filepath.Abs(ev.Name)
+				if evAbs != current.get() {
 					continue
 				}
 				if timer != nil {
@@ -200,10 +272,15 @@ func main() {
 		fmt.Fprintf(os.Stderr, "cannot open %s: %v\n", path, err)
 		os.Exit(1)
 	}
-	absPath, _ := filepath.Abs(path)
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		log.Fatalf("abs: %v", err)
+	}
+	baseDir := filepath.Dir(absPath)
 
+	current := &currentFile{path: absPath}
 	bc := newBroadcaster()
-	if err := watchFile(absPath, bc); err != nil {
+	if err := watchDir(baseDir, current, bc); err != nil {
 		log.Fatalf("watcher: %v", err)
 	}
 
@@ -220,17 +297,35 @@ func main() {
 	r.StaticFS("/assets", http.FS(staticFS))
 
 	r.GET("/", func(c *gin.Context) {
-		body, err := renderMarkdown(absPath)
+		target := absPath
+		if rel := c.Query("file"); rel != "" {
+			resolved, err := resolveTarget(baseDir, rel)
+			if err != nil {
+				c.String(http.StatusBadRequest, "invalid file: %v", err)
+				return
+			}
+			target = resolved
+		}
+		current.set(target)
+
+		body, err := renderMarkdown(target)
 		if err != nil {
 			c.String(http.StatusInternalServerError, "render error: %v", err)
 			return
 		}
+		files, err := listMarkdownFiles(baseDir)
+		if err != nil {
+			log.Printf("list dir: %v", err)
+			files = []string{filepath.Base(target)}
+		}
 		c.Header("Content-Type", "text/html; charset=utf-8")
 		c.Status(http.StatusOK)
 		_ = tmpl.Execute(c.Writer, map[string]any{
-			"Title":     filepath.Base(absPath),
+			"Title":     filepath.Base(target),
 			"Body":      body,
 			"ChromaCSS": chromaCSS,
+			"Files":     files,
+			"Current":   filepath.Base(target),
 		})
 	})
 

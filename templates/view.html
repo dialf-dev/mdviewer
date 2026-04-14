@@ -23,6 +23,11 @@
 <body>
 <header class="topbar">
   <div class="topbar-inner">
+    <button type="button" class="hamburger" id="sidebarToggle" aria-label="Toggle file list" aria-expanded="false" aria-controls="sidebar">
+      <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M1 4h14a1 1 0 0 0 0-2H1a1 1 0 0 0 0 2Zm0 5h14a1 1 0 0 0 0-2H1a1 1 0 0 0 0 2Zm0 5h14a1 1 0 0 0 0-2H1a1 1 0 0 0 0 2Z"/>
+      </svg>
+    </button>
     <div class="topbar-title">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
         <path d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9 4.25V1.5Zm6.75.062V4.25c0 .138.112.25.25.25h2.688l-.011-.013-2.914-2.914-.013-.011Z"/>
@@ -45,6 +50,20 @@
     </div>
   </div>
 </header>
+
+<aside class="sidebar" id="sidebar" aria-hidden="true" aria-label="Markdown files in this directory">
+  <div class="sidebar-header">Files</div>
+  <ul class="filelist">
+    {{range .Files}}
+      <li>
+        <a href="?file={{. | urlquery}}" class="filelist-item{{if eq . $.Current}} active{{end}}" title="{{.}}">{{.}}</a>
+      </li>
+    {{else}}
+      <li class="filelist-empty">No markdown files</li>
+    {{end}}
+  </ul>
+</aside>
+<div class="sidebar-scrim" id="sidebarScrim" aria-hidden="true"></div>
 
 <div class="page">
   <main class="markdown-body">
@@ -69,6 +88,25 @@
     var btn = e.target.closest('[data-theme-btn]');
     if (btn) apply(btn.dataset.themeBtn);
   });
+
+  var btn = document.getElementById('sidebarToggle');
+  var sidebar = document.getElementById('sidebar');
+  var scrim = document.getElementById('sidebarScrim');
+  function toggleSidebar(force) {
+    var open = (typeof force === 'boolean') ? force : !sidebar.classList.contains('open');
+    sidebar.classList.toggle('open', open);
+    if (scrim) scrim.classList.toggle('visible', open);
+    btn.setAttribute('aria-expanded', String(open));
+    sidebar.setAttribute('aria-hidden', String(!open));
+    if (scrim) scrim.setAttribute('aria-hidden', String(!open));
+  }
+  if (btn && sidebar) {
+    btn.addEventListener('click', function () { toggleSidebar(); });
+    if (scrim) scrim.addEventListener('click', function () { toggleSidebar(false); });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && sidebar.classList.contains('open')) toggleSidebar(false);
+    });
+  }
 
   try {
     var es = new EventSource('/events');
