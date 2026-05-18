@@ -53,15 +53,9 @@
 
 <aside class="sidebar" id="sidebar" aria-hidden="true" aria-label="Markdown files in this directory">
   <div class="sidebar-header">Files</div>
-  <ul class="filelist">
-    {{range .Files}}
-      <li>
-        <a href="?file={{. | urlquery}}" class="filelist-item{{if eq . $.Current}} active{{end}}" title="{{.}}">{{.}}</a>
-      </li>
-    {{else}}
-      <li class="filelist-empty">No markdown files</li>
-    {{end}}
-  </ul>
+  <div class="filetree-wrap">
+    {{.Tree}}
+  </div>
 </aside>
 <div class="sidebar-scrim" id="sidebarScrim" aria-hidden="true"></div>
 

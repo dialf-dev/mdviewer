@@ -53,10 +53,6 @@ var md = goldmark.New(
 var chromaCSS template.CSS
 
 func init() {
-	// Scope chroma's generated rules by the `data-theme` attribute on <html>
-	// using CSS nesting. A block like `html[data-theme="light"] { .chroma { ... } }`
-	// is rewritten by the browser to `html[data-theme="light"] .chroma { ... }`,
-	// so only the active theme's rules apply.
 	var buf bytes.Buffer
 	f := chromahtml.New(chromahtml.WithClasses(true))
 
@@ -92,22 +88,117 @@ func isMarkdown(name string) bool {
 	return ext == ".md" || ext == ".markdown"
 }
 
-func listMarkdownFiles(dir string) ([]string, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, fmt.Errorf("read dir %s: %w", dir, err)
+type fileNode struct {
+	Name     string
+	Path     string // relative to baseDir, forward-slash separated
+	IsDir    bool
+	Children []*fileNode
+}
+
+func buildTree(baseDir string) (*fileNode, error) {
+	root := &fileNode{IsDir: true}
+	if err := walkInto(root, baseDir, ""); err != nil {
+		return nil, err
 	}
-	out := make([]string, 0, len(entries))
+	return root, nil
+}
+
+func walkInto(node *fileNode, absDir, relDir string) error {
+	entries, err := os.ReadDir(absDir)
+	if err != nil {
+		return err
+	}
 	for _, e := range entries {
-		if e.IsDir() || !isMarkdown(e.Name()) {
+		name := e.Name()
+		if strings.HasPrefix(name, ".") {
 			continue
 		}
-		out = append(out, e.Name())
+		childRel := name
+		if relDir != "" {
+			childRel = relDir + "/" + name
+		}
+		if e.IsDir() {
+			child := &fileNode{Name: name, Path: childRel, IsDir: true}
+			if err := walkInto(child, filepath.Join(absDir, name), childRel); err != nil {
+				continue
+			}
+			if subtreeHasMarkdown(child) {
+				node.Children = append(node.Children, child)
+			}
+		} else if isMarkdown(name) {
+			node.Children = append(node.Children, &fileNode{Name: name, Path: childRel})
+		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return strings.ToLower(out[i]) < strings.ToLower(out[j])
+	sort.Slice(node.Children, func(i, j int) bool {
+		a, b := node.Children[i], node.Children[j]
+		if a.IsDir != b.IsDir {
+			return a.IsDir
+		}
+		return strings.ToLower(a.Name) < strings.ToLower(b.Name)
 	})
-	return out, nil
+	return nil
+}
+
+func subtreeHasMarkdown(n *fileNode) bool {
+	for _, c := range n.Children {
+		if !c.IsDir {
+			return true
+		}
+		if subtreeHasMarkdown(c) {
+			return true
+		}
+	}
+	return false
+}
+
+func renderTree(root *fileNode, current string) template.HTML {
+	var b strings.Builder
+	if len(root.Children) == 0 {
+		b.WriteString(`<div class="filelist-empty">No markdown files</div>`)
+		return template.HTML(b.String())
+	}
+	writeTreeUL(&b, root.Children, current, true)
+	return template.HTML(b.String())
+}
+
+func writeTreeUL(b *strings.Builder, nodes []*fileNode, current string, root bool) {
+	if root {
+		b.WriteString(`<ul class="filetree filetree-root">`)
+	} else {
+		b.WriteString(`<ul class="filetree">`)
+	}
+	for _, n := range nodes {
+		b.WriteString("<li>")
+		if n.IsDir {
+			open := strings.HasPrefix(current, n.Path+"/")
+			b.WriteString(`<details class="tree-dir"`)
+			if open {
+				b.WriteString(" open")
+			}
+			b.WriteString(`><summary><span class="tree-caret" aria-hidden="true"></span>`)
+			b.WriteString(`<svg class="tree-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1.75 2A1.75 1.75 0 0 0 0 3.75v8.5C0 13.216.784 14 1.75 14h12.5A1.75 1.75 0 0 0 16 12.25v-7A1.75 1.75 0 0 0 14.25 3.5H7.5l-.943-.943A1.75 1.75 0 0 0 5.318 2H1.75Z"/></svg>`)
+			b.WriteString(`<span class="tree-label">`)
+			template.HTMLEscape(b, []byte(n.Name))
+			b.WriteString(`</span></summary>`)
+			writeTreeUL(b, n.Children, current, false)
+			b.WriteString(`</details>`)
+		} else {
+			b.WriteString(`<a class="filelist-item`)
+			if n.Path == current {
+				b.WriteString(" active")
+			}
+			b.WriteString(`" href="?file=`)
+			b.WriteString(template.URLQueryEscaper(n.Path))
+			b.WriteString(`" title="`)
+			template.HTMLEscape(b, []byte(n.Path))
+			b.WriteString(`"><svg class="tree-icon file" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9 4.25V1.5Zm6.75.062V4.25c0 .138.112.25.25.25h2.688l-.011-.013-2.914-2.914-.013-.011Z"/></svg>`)
+			b.WriteString(`<span class="tree-label">`)
+			template.HTMLEscape(b, []byte(n.Name))
+			b.WriteString(`</span></a>`)
+		}
+		b.WriteString("</li>")
+	}
+	b.WriteString("</ul>")
 }
 
 func resolveTarget(baseDir, rel string) (string, error) {
@@ -195,14 +286,26 @@ func (b *broadcaster) publish() {
 	}
 }
 
-func watchDir(dir string, current *currentFile, b *broadcaster) error {
+func watchTree(baseDir string, current *currentFile, b *broadcaster) error {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		return fmt.Errorf("new watcher: %w", err)
 	}
-	if err := w.Add(dir); err != nil {
-		return fmt.Errorf("watch %s: %w", dir, err)
+	addRecursive := func(root string) {
+		_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			if d.IsDir() {
+				if p != root && strings.HasPrefix(d.Name(), ".") {
+					return fs.SkipDir
+				}
+				_ = w.Add(p)
+			}
+			return nil
+		})
 	}
+	addRecursive(baseDir)
 	go func() {
 		var timer *time.Timer
 		for {
@@ -210,6 +313,11 @@ func watchDir(dir string, current *currentFile, b *broadcaster) error {
 			case ev, ok := <-w.Events:
 				if !ok {
 					return
+				}
+				if ev.Op&fsnotify.Create != 0 {
+					if st, err := os.Stat(ev.Name); err == nil && st.IsDir() {
+						addRecursive(ev.Name)
+					}
 				}
 				if ev.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) == 0 {
 					continue
@@ -253,6 +361,14 @@ func pickListener(preferred int) (net.Listener, int, error) {
 	return ln, ln.Addr().(*net.TCPAddr).Port, nil
 }
 
+func relSlash(baseDir, target string) string {
+	r, err := filepath.Rel(baseDir, target)
+	if err != nil {
+		return filepath.Base(target)
+	}
+	return filepath.ToSlash(r)
+}
+
 func main() {
 	port := flag.Int("port", 8080, "preferred port (falls back to a random free port if in use)")
 	flag.Usage = func() {
@@ -280,7 +396,7 @@ func main() {
 
 	current := &currentFile{path: absPath}
 	bc := newBroadcaster()
-	if err := watchDir(baseDir, current, bc); err != nil {
+	if err := watchTree(baseDir, current, bc); err != nil {
 		log.Fatalf("watcher: %v", err)
 	}
 
@@ -313,19 +429,20 @@ func main() {
 			c.String(http.StatusInternalServerError, "render error: %v", err)
 			return
 		}
-		files, err := listMarkdownFiles(baseDir)
+		root, err := buildTree(baseDir)
 		if err != nil {
-			log.Printf("list dir: %v", err)
-			files = []string{filepath.Base(target)}
+			log.Printf("build tree: %v", err)
+			root = &fileNode{IsDir: true}
 		}
+		currentRel := relSlash(baseDir, target)
 		c.Header("Content-Type", "text/html; charset=utf-8")
 		c.Status(http.StatusOK)
 		_ = tmpl.Execute(c.Writer, map[string]any{
 			"Title":     filepath.Base(target),
 			"Body":      body,
 			"ChromaCSS": chromaCSS,
-			"Files":     files,
-			"Current":   filepath.Base(target),
+			"Tree":      renderTree(root, currentRel),
+			"Current":   currentRel,
 		})
 	})
 
