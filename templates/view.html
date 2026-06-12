@@ -51,8 +51,16 @@
   </div>
 </header>
 
-<aside class="sidebar" id="sidebar" aria-hidden="true" aria-label="Markdown files in this directory">
-  <div class="sidebar-header">Files</div>
+<aside class="sidebar" id="sidebar" aria-hidden="true" aria-label="Registered markdown directories">
+  <div class="sidebar-header">
+    <span>Files</span>
+    <a class="upload-btn" href="/upload" title="Upload markdown files">
+      <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M2.75 14A1.75 1.75 0 0 1 1 12.25v-2.5a.75.75 0 0 1 1.5 0v2.5c0 .138.112.25.25.25h10.5a.25.25 0 0 0 .25-.25v-2.5a.75.75 0 0 1 1.5 0v2.5A1.75 1.75 0 0 1 13.25 14ZM11.78 4.72a.749.749 0 1 1-1.06 1.06L8.75 3.811V9.5a.75.75 0 0 1-1.5 0V3.811L5.28 5.78a.749.749 0 1 1-1.06-1.06l3.25-3.25a.749.749 0 0 1 1.06 0l3.25 3.25Z"/>
+      </svg>
+      <span>Upload</span>
+    </a>
+  </div>
   <div class="filetree-wrap">
     {{.Tree}}
   </div>
@@ -102,11 +110,14 @@
     });
   }
 
-  try {
-    var es = new EventSource('/events');
-    es.addEventListener('reload', function () { location.reload(); });
-    es.onerror = function () { /* auto-retry handled by browser */ };
-  } catch (e) {}
+  var docID = "{{.DocID}}";
+  if (docID) {
+    try {
+      var es = new EventSource('/events?d=' + encodeURIComponent(docID));
+      es.addEventListener('reload', function () { location.reload(); });
+      es.onerror = function () { /* auto-retry handled by browser */ };
+    } catch (e) {}
+  }
 })();
 </script>
 </body>

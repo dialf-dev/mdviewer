@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} — mdv</title>
+<script>
+  (function () {
+    try {
+      var t = localStorage.getItem('mdv-theme');
+      if (t !== 'light' && t !== 'dark') {
+        t = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+      }
+      document.documentElement.setAttribute('data-theme', t);
+    } catch (e) {
+      document.documentElement.setAttribute('data-theme', 'light');
+    }
+  })();
+</script>
+<link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="back-btn" href="/">&larr; Back</a>
+    <div class="topbar-title">
+      <span class="topbar-filename">Upload</span>
+    </div>
+    <div class="theme-toggle" role="group" aria-label="Color theme">
+      <button type="button" data-theme-btn="light" aria-pressed="false" title="Light theme"><span>Light</span></button>
+      <button type="button" data-theme-btn="dark" aria-pressed="false" title="Dark theme"><span>Dark</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="page">
+  <div class="upload-card">
+    <h1>Upload markdown files</h1>
+
+    <div class="mode-toggle" role="group" aria-label="Upload method">
+      <button type="button" data-mode="browse" aria-pressed="true">File Browser</button>
+      <button type="button" data-mode="drop" aria-pressed="false">Drag &amp; Drop</button>
+    </div>
+
+    <div class="upload-pane" id="pane-browse">
+      <input type="file" id="fileInput" multiple accept=".md,.markdown">
+    </div>
+
+    <div class="upload-pane" id="pane-drop" hidden>
+      <div class="dropzone" id="dropzone">Drop .md / .markdown files here</div>
+    </div>
+
+    <ul class="upload-queue" id="queue"></ul>
+    <button type="button" class="upload-submit" id="uploadBtn" disabled>Upload</button>
+    <ul class="upload-results" id="results"></ul>
+  </div>
+</div>
+
+<script>
+(function () {
+  var KEY = 'mdv-theme';
+  var root = document.documentElement;
+  function applyTheme(theme) {
+    root.setAttribute('data-theme', theme);
+    var btns = document.querySelectorAll('[data-theme-btn]');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].setAttribute('aria-pressed', btns[i].dataset.themeBtn === theme ? 'true' : 'false');
+    }
+    try { localStorage.setItem(KEY, theme); } catch (e) {}
+  }
+  applyTheme(root.getAttribute('data-theme') || 'light');
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-theme-btn]');
+    if (btn) applyTheme(btn.dataset.themeBtn);
+  });
+
+  var panes = {
+    browse: document.getElementById('pane-browse'),
+    drop: document.getElementById('pane-drop')
+  };
+  function setMode(mode) {
+    var btns = document.querySelectorAll('[data-mode]');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].setAttribute('aria-pressed', btns[i].dataset.mode === mode ? 'true' : 'false');
+    }
+    panes.browse.hidden = mode !== 'browse';
+    panes.drop.hidden = mode !== 'drop';
+  }
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-mode]');
+    if (btn) setMode(btn.dataset.mode);
+  });
+
+  var selected = [];
+  var input = document.getElementById('fileInput');
+  var dropzone = document.getElementById('dropzone');
+  var queue = document.getElementById('queue');
+  var results = document.getElementById('results');
+  var uploadBtn = document.getElementById('uploadBtn');
+
+  function isMd(name) {
+    var n = name.toLowerCase();
+    return n.slice(-3) === '.md' || n.slice(-9) === '.markdown';
+  }
+  function fmtSize(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1048576).toFixed(1) + ' MB';
+  }
+  function addFiles(list) {
+    for (var i = 0; i < list.length; i++) {
+      var f = list[i];
+      if (!isMd(f.name)) {
+        addResult(f.name, null, 'skipped: only .md / .markdown files are allowed');
+        continue;
+      }
+      var dup = selected.some(function (s) { return s.name === f.name && s.size === f.size; });
+      if (!dup) selected.push(f);
+    }
+    renderQueue();
+  }
+  function renderQueue() {
+    queue.innerHTML = '';
+    selected.forEach(function (f, idx) {
+      var li = document.createElement('li');
+      var name = document.createElement('span');
+      name.textContent = f.name;
+      var size = document.createElement('span');
+      size.className = 'size';
+      size.textContent = fmtSize(f.size);
+      var rm = document.createElement('button');
+      rm.type = 'button';
+      rm.className = 'queue-remove';
+      rm.textContent = '×';
+      rm.title = 'Remove';
+      rm.addEventListener('click', function () {
+        selected.splice(idx, 1);
+        renderQueue();
+      });
+      li.appendChild(name);
+      li.appendChild(size);
+      li.appendChild(rm);
+      queue.appendChild(li);
+    });
+    uploadBtn.disabled = selected.length === 0;
+  }
+  function addResult(name, url, errMsg) {
+    var li = document.createElement('li');
+    li.className = errMsg ? 'err' : 'ok';
+    if (url) {
+      var a = document.createElement('a');
+      a.href = url;
+      a.textContent = name;
+      li.appendChild(a);
+      li.appendChild(document.createTextNode(' uploaded'));
+    } else {
+      li.textContent = name + ' — ' + (errMsg || 'failed');
+    }
+    results.appendChild(li);
+  }
+
+  input.addEventListener('change', function () {
+    addFiles(input.files);
+    input.value = '';
+  });
+
+  ['dragenter', 'dragover'].forEach(function (evName) {
+    dropzone.addEventListener(evName, function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      dropzone.classList.add('dragover');
+    });
+  });
+  ['dragleave', 'drop'].forEach(function (evName) {
+    dropzone.addEventListener(evName, function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      dropzone.classList.remove('dragover');
+    });
+  });
+  dropzone.addEventListener('drop', function (e) {
+    if (e.dataTransfer && e.dataTransfer.files) addFiles(e.dataTransfer.files);
+  });
+
+  uploadBtn.addEventListener('click', function () {
+    if (selected.length === 0) return;
+    uploadBtn.disabled = true;
+    uploadBtn.textContent = 'Uploading…';
+    var fd = new FormData();
+    selected.forEach(function (f) { fd.append('files', f); });
+    fetch('/api/upload', { method: 'POST', body: fd })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        (data.files || []).forEach(function (f) {
+          addResult(f.name, f.url || null, f.error || (data.ok ? null : data.error));
+        });
+        if (!data.files && data.error) addResult('upload', null, data.error);
+        selected = [];
+        renderQueue();
+      })
+      .catch(function (err) {
+        addResult('upload', null, String(err));
+      })
+      .finally(function () {
+        uploadBtn.textContent = 'Upload';
+        uploadBtn.disabled = selected.length === 0;
+      });
+  });
+})();
+</script>
+</body>
+</html>
